@@ -39,6 +39,17 @@ RUN apt update \
     && apt clean -y \
     && rm -rf /var/lib/apt/lists/*
 
+# Generate a UTF-8 locale. Without it cupsd runs in the C (ASCII) locale and
+# mangles the IEEE-1284 device-ID string read from USB printers, producing a
+# garbled usb:// connection URI in the web interface.
+RUN sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen \
+    && locale-gen \
+    && update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
+    LC_ALL=en_US.UTF-8
+
 # Add Canon cnijfilter2 driver
 RUN cd /tmp \
   && if [ "$(arch)" = 'x86_64' ]; then ARCH="amd64"; else ARCH="arm64"; fi \

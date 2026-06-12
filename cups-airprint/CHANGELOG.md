@@ -1,3 +1,7 @@
+## v2.1 (Potochi fork)
+
+- Fix garbled `usb://` connection URI when adding a USB printer: generate and set an `en_US.UTF-8` locale so cupsd decodes the printer's IEEE-1284 device-ID correctly (previously ran in the C/ASCII locale)
+
 ## v2.0 (Potochi fork)
 
 - Bump base image to `debian-base` 9.3.0 (Debian 12 bookworm → 13 trixie)
