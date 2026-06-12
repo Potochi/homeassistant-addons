@@ -1,0 +1,41 @@
+name: Calibre Server
+version: "1.1.2"
+slug: calibre_server
+description: Calibre 9.9.0 headless content server for your e-book library.
+url: https://manual.calibre-ebook.com/server.html
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+# s6-overlay v3 (used by HA base) refuses to start unless it is PID 1.
+# Docker's default --init wrapper would steal PID 1, so disable it.
+init: false
+# host_network is required so Bonjour/mDNS announcements reach the LAN
+# (Docker bridge networks don't forward multicast) and so calibre advertises
+# the host's real IP rather than the docker-internal 172.x address.
+# Trade-off: the add-on shares the host's network namespace, can bind any
+# host port, and has no docker-level network isolation.
+host_network: true
+webui: "http://[HOST]:[PORT:8080]/"
+map:
+  - type: share
+    read_only: false
+  - type: media
+    read_only: false
+options:
+  library: /share/calibre
+  port: 8080
+  username: ""
+  password: ""
+  enable_local_write: true
+  log_level: info
+  extra_args: ""
+schema:
+  library: str
+  port: port
+  username: str
+  password: password
+  enable_local_write: bool
+  log_level: list(trace|debug|info|notice|warning|error|fatal)
+  extra_args: str

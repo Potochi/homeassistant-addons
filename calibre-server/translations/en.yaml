@@ -1,0 +1,33 @@
+configuration:
+  library:
+    name: Library path
+    description: >-
+      Directory inside the container that the content server should serve.
+      Pick something under /share or /media so the data survives add-on
+      reinstalls. Created automatically on first start.
+  port:
+    name: Server port
+    description: TCP port the content server listens on inside the container.
+  username:
+    name: Username
+    description: >-
+      Optional. Set together with the password to require HTTP auth. Leave
+      blank to keep the server open to anyone with network access.
+  password:
+    name: Password
+    description: Companion to the username field.
+  enable_local_write:
+    name: Allow uploads & edits
+    description: >-
+      Allow authenticated users to add, edit, and delete books through the
+      web UI.
+  log_level:
+    name: Log level
+    description: Reserved for future use; Calibre always logs to stdout.
+  extra_args:
+    name: Extra arguments
+    description: >-
+      Raw extra arguments appended to the calibre-server command line. Useful
+      for things like --url-prefix when running behind a reverse proxy.
+network:
+  8080/tcp: Calibre content server (web UI + OPDS)

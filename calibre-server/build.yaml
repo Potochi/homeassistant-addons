@@ -1,0 +1,10 @@
+build_from:
+  amd64: ghcr.io/home-assistant/amd64-base-debian:bookworm
+  aarch64: ghcr.io/home-assistant/aarch64-base-debian:bookworm
+args:
+  CALIBRE_VERSION: "9.9.0"
+labels:
+  org.opencontainers.image.title: Calibre Server
+  org.opencontainers.image.description: Calibre content server for Home Assistant
+  org.opencontainers.image.source: https://github.com/Potochi/homeassistant-addon-calibre
+  org.opencontainers.image.licenses: GPL-3.0-only

@@ -1,0 +1,26 @@
+# https://developers.home-assistant.io/docs/apps/configuration
+name: TFTP Server
+version: "1.0.0"
+slug: tftp
+description: >-
+  TFTP server that serves files from a folder inside /share, so you can
+  manage the files over NFS or Samba.
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: services
+boot: auto
+host_network: true
+map:
+  - type: share
+    read_only: false
+options:
+  directory: tftp
+  allow_uploads: false
+  verbose: true
+schema:
+  directory: str
+  allow_uploads: bool
+  verbose: bool
+  extra_args: str?

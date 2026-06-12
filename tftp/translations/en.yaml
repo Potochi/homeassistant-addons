@@ -1,0 +1,19 @@
+configuration:
+  directory:
+    name: Share subfolder
+    description: >-
+      Subfolder of /share to serve over TFTP. The default "tftp" serves
+      /share/tftp. Created automatically if missing.
+  allow_uploads:
+    name: Allow uploads
+    description: >-
+      Allow TFTP clients to create and overwrite files in the served folder.
+      Makes the folder world-writable so the unprivileged server can write.
+  verbose:
+    name: Verbose logging
+    description: Log every transfer (RRQ/WRQ) to the app log.
+  extra_args:
+    name: Extra in.tftpd arguments
+    description: >-
+      Optional extra command-line arguments passed verbatim to in.tftpd,
+      for example "--blocksize 1468".
