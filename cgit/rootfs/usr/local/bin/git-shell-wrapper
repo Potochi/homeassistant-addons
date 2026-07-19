@@ -1,0 +1,117 @@
+#!/bin/sh
+# ==============================================================================
+# Login shell for the 'git' SSH user.
+#
+# sshd invokes this as:  git-shell-wrapper -c "<git command>"
+# It accepts only git-{receive,upload}-pack / upload-archive, resolves the
+# repository path under REPOS_ROOT, optionally auto-creates a bare repo on the
+# first push, and execs the git verb with the path as a literal argument (no
+# shell re-parsing, so the path can never be used for command injection).
+# ==============================================================================
+set -eu
+
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+# Load REPOS_ROOT / AUTO_INIT written by cgit-setup.
+ENV_FILE="${HOME:-/data/git}/git-server.env"
+[ -f "${ENV_FILE}" ] || ENV_FILE=/data/git/git-server.env
+# shellcheck disable=SC1090
+[ -f "${ENV_FILE}" ] && . "${ENV_FILE}"
+: "${REPOS_ROOT:=/share/git}"
+: "${AUTO_INIT:=true}"
+
+die() { printf 'cgit-ssh: %s\n' "$1" >&2; exit 1; }
+
+cmd="${SSH_ORIGINAL_COMMAND:-}"
+# Fallback to the argument sshd passed after -c.
+if [ -z "${cmd}" ] && [ "${1:-}" = "-c" ]; then
+    cmd="${2:-}"
+fi
+
+[ -n "${cmd}" ] || die "interactive shell access is not allowed - this account only serves git."
+
+# Identify the git verb (both 'git-receive-pack' and 'git receive-pack' forms).
+case "${cmd}" in
+    git-receive-pack\ *|"git receive-pack "*)     verb="receive-pack" ;;
+    git-upload-pack\ *|"git upload-pack "*)        verb="upload-pack" ;;
+    git-upload-archive\ *|"git upload-archive "*)  verb="upload-archive" ;;
+    *) die "denied: only git push/fetch is allowed." ;;
+esac
+
+# Extract the repository path (git single-quotes it).
+tmp="${cmd#*\'}"
+if [ "${tmp}" != "${cmd}" ]; then
+    path="${tmp%\'*}"
+else
+    path="${cmd##* }"
+fi
+
+# Normalize: drop ~/ and leading slashes so ssh://host/foo.git, git@host:foo.git
+# and ssh://host/~/foo.git all resolve to the same repo.
+path="${path#\~/}"
+path="${path#\~}"
+while [ "${path#/}" != "${path}" ]; do path="${path#/}"; done
+while [ "${path%/}" != "${path}" ]; do path="${path%/}"; done
+
+[ -n "${path}" ] || die "no repository specified."
+case "${path}" in
+    *..*) die "invalid repository path (contains '..')." ;;
+    *\'*) die "invalid repository path (contains quote)." ;;
+esac
+
+# Append .git if the caller omitted it and that's how the repo exists on disk.
+abspath="${REPOS_ROOT}/${path}"
+if [ ! -d "${abspath}" ] && [ -d "${abspath}.git" ]; then
+    abspath="${abspath}.git"
+fi
+
+# Auto-create a bare repo on first push.
+if [ "${verb}" = "receive-pack" ] && [ ! -d "${abspath}" ]; then
+    case "${AUTO_INIT}" in
+        true|True|1)
+            case "${abspath}" in
+                *.git) : ;;
+                *) abspath="${abspath}.git" ;;
+            esac
+            printf 'cgit-ssh: creating new repository %s\n' "${abspath#${REPOS_ROOT}/}" >&2
+            mkdir -p "${abspath}"
+            git init --bare --shared=group "${abspath}" >/dev/null
+            ;;
+        *)
+            die "repository '${path}' does not exist (auto_init is disabled)."
+            ;;
+    esac
+fi
+
+[ -d "${abspath}" ] || die "repository '${path}' does not exist."
+
+# For fetch/clone, hand off directly.
+if [ "${verb}" != "receive-pack" ]; then
+    exec git "${verb}" "${abspath}"
+fi
+
+# For push, run (don't exec) so we can repair HEAD afterwards. A freshly
+# auto-init'd bare repo has HEAD -> refs/heads/master; if the client pushed a
+# differently named default branch (e.g. main), HEAD dangles and HTTP clients
+# fail with "remote HEAD refers to nonexistent ref". Repoint HEAD at the pushed
+# branch (preferring main/master) so both HTTP and SSH clones work.
+status=0
+git receive-pack "${abspath}" || status=$?
+
+if ! git --git-dir="${abspath}" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    target=""
+    for pref in refs/heads/main refs/heads/master; do
+        if git --git-dir="${abspath}" show-ref --verify -q "${pref}"; then
+            target="${pref}"
+            break
+        fi
+    done
+    if [ -z "${target}" ]; then
+        target=$(git --git-dir="${abspath}" for-each-ref --format='%(refname)' --count=1 refs/heads)
+    fi
+    if [ -n "${target}" ]; then
+        git --git-dir="${abspath}" symbolic-ref HEAD "${target}"
+    fi
+fi
+
+exit "${status}"

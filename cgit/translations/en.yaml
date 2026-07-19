@@ -1,0 +1,55 @@
+configuration:
+  repos_dir:
+    name: Repositories subfolder
+    description: >-
+      Subfolder of /share that holds the bare git repositories. The default
+      "git" serves /share/git. Created automatically if missing.
+  push_keys:
+    name: Push keys (SSH public keys)
+    description: >-
+      SSH public keys allowed to push and fetch over SSH, one per entry in
+      authorized_keys format (e.g. "ssh-ed25519 AAAA... you@laptop"). Every key
+      can access every repository. Paste public keys only, never private keys.
+  auto_init:
+    name: Auto-create repositories
+    description: >-
+      Create a bare repository automatically on the first push to a name that
+      does not exist yet. When off, pushing to a missing repository is refused.
+  root_title:
+    name: Index title
+    description: Heading shown at the top of the cgit index page.
+  root_desc:
+    name: Index description
+    description: Sub-heading shown under the index title.
+  clone_url_ssh:
+    name: SSH clone base URL
+    description: >-
+      SSH base URL advertised on each repository page; the repo path is appended
+      automatically. Example: ssh://git@homeassistant.local:2222. Leave blank to
+      hide the SSH clone URL. Match the port to the mapped SSH host port.
+  enable_http_clone:
+    name: Enable HTTP clone
+    description: >-
+      Serve read-only clone/fetch over HTTP and advertise the HTTP clone URL.
+      Pushing over HTTP is always refused; push over SSH.
+  fix_permissions:
+    name: Fix repository ownership
+    description: >-
+      On start, change ownership of the repositories folder to the git user so
+      pushes can write. Turn off if you manage ownership yourself.
+  git_uid:
+    name: Git user UID
+    description: >-
+      UID of the git service user. Set it to match the owner your NFS/Samba
+      clients use for consistent ownership on /share.
+  git_gid:
+    name: Git user GID
+    description: GID of the git service user.
+  extra_cgitrc:
+    name: Extra cgitrc lines
+    description: >-
+      Extra lines appended verbatim to the generated cgitrc (before scan-path),
+      for cgit settings not exposed as options, e.g. "enable-blame=1".
+network:
+  80/tcp: cgit web interface (browse repositories and clone over HTTP)
+  22/tcp: Git over SSH (push and fetch with the authorized keys)

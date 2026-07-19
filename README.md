@@ -7,6 +7,7 @@ A collection of Home Assistant apps (add-ons).
 | **TFTP Server** | [`tftp/`](tftp/) | Serves files over TFTP from a folder inside `/share`, manageable over NFS/Samba. Optional uploads. |
 | **Calibre Server** | [`calibre-server/`](calibre-server/) | Headless Calibre content server for your e-book library. |
 | **CUPS** | [`cups-airprint/`](cups-airprint/) | CUPS print server with working AirPrint. |
+| **CGit Server** | [`cgit/`](cgit/) | Browse git repositories with cgit and push over SSH with a shared key set. Repos live inside `/share`. |
 
 ## Installation
 

@@ -1,0 +1,9 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# cgit web interface: lighttpd serving cgit.cgi + git-http-backend.
+# init-cgit has already written /etc/lighttpd/lighttpd.conf and /etc/cgitrc.
+# ==============================================================================
+bashio::log.info "Starting lighttpd (cgit web interface) on port 80"
+
+# -D keeps lighttpd in the foreground so s6 can supervise it.
+exec lighttpd -D -f /etc/lighttpd/lighttpd.conf

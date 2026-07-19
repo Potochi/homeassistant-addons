@@ -1,0 +1,50 @@
+# https://developers.home-assistant.io/docs/apps/configuration
+name: CGit Server
+version: "1.0.0"
+slug: cgit
+description: >-
+  Browse git repositories in your browser with cgit and push over SSH with a
+  shared set of keys. Repositories live in a folder inside /share, so you can
+  also reach them over NFS or Samba.
+url: https://git.zx2c4.com/cgit/about/
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: services
+boot: auto
+ports:
+  "80/tcp": 8087
+  "22/tcp": 2222
+ports_description:
+  "80/tcp": cgit web interface (browse repositories and clone over HTTP)
+  "22/tcp": Git over SSH (push and clone with the authorized keys)
+webui: "http://[HOST]:[PORT:80]/"
+map:
+  - type: share
+    read_only: false
+options:
+  repos_dir: git
+  push_keys: []
+  auto_init: true
+  root_title: Git repositories
+  root_desc: Hosted on Home Assistant
+  clone_url_ssh: ""
+  enable_http_clone: true
+  fix_permissions: true
+  git_uid: 1000
+  git_gid: 1000
+  extra_cgitrc: ""
+schema:
+  repos_dir: str
+  push_keys:
+    - str
+  auto_init: bool
+  root_title: str
+  root_desc: str
+  clone_url_ssh: str?
+  enable_http_clone: bool
+  fix_permissions: bool
+  git_uid: int
+  git_gid: int
+  extra_cgitrc: str?

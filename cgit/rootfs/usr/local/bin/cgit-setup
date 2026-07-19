@@ -1,0 +1,245 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# CGit Server - one-shot setup (runs before lighttpd and sshd).
+#
+# Provisions the 'git' service user, SSH host keys + authorized_keys, the repo
+# directory under /share, and writes /etc/cgitrc and /etc/lighttpd/lighttpd.conf
+# from the add-on options.
+# ==============================================================================
+set -euo pipefail
+
+readonly OPTIONS=/data/options.json
+opt() { jq -r "${1}" "${OPTIONS}"; }
+
+repos_dir="$(opt '.repos_dir // "git"')"
+auto_init="$(opt '.auto_init != false')"
+root_title="$(opt '.root_title // "Git repositories"')"
+root_desc="$(opt '.root_desc // ""')"
+clone_url_ssh="$(opt '.clone_url_ssh // ""')"
+enable_http_clone="$(opt '.enable_http_clone != false')"
+fix_permissions="$(opt '.fix_permissions != false')"
+git_uid="$(opt '.git_uid // 1000')"
+git_gid="$(opt '.git_gid // 1000')"
+extra_cgitrc="$(opt '.extra_cgitrc // ""')"
+
+# --- Validate and resolve the repository root under /share -------------------
+while [[ "${repos_dir}" == /* ]]; do repos_dir="${repos_dir#/}"; done
+while [[ "${repos_dir}" == */ ]]; do repos_dir="${repos_dir%/}"; done
+if [[ -z "${repos_dir}" ]]; then
+    bashio::exit.nok "Option 'repos_dir' must not be empty"
+fi
+if [[ "${repos_dir}" == *..* ]]; then
+    bashio::exit.nok "Option 'repos_dir' must not contain '..'"
+fi
+REPOS_ROOT="/share/${repos_dir}"
+
+bashio::log.info "Repository root: ${REPOS_ROOT}"
+mkdir -p "${REPOS_ROOT}"
+
+# --- (Re)create the 'git' service user with the configured uid/gid -----------
+# Recreated on every start so a changed uid/gid in options takes effect. Only
+# the passwd/group records are touched; repo and home data on disk are kept.
+GIT_HOME=/data/git
+deluser git >/dev/null 2>&1 || true
+delgroup git >/dev/null 2>&1 || true
+addgroup -g "${git_gid}" git 2>/dev/null || addgroup git
+adduser -D -H -h "${GIT_HOME}" -s /usr/local/bin/git-shell-wrapper \
+        -G git -u "${git_uid}" git 2>/dev/null \
+    || adduser -D -H -h "${GIT_HOME}" -s /usr/local/bin/git-shell-wrapper -G git git
+# Unlock the account: sshd with UsePAM no still refuses pubkey auth for an
+# account whose password field is "!". "*" means "no password login" but
+# leaves pubkey auth working.
+sed -i 's/^git:!:/git:*:/' /etc/shadow || true
+
+mkdir -p "${GIT_HOME}/.ssh"
+
+# --- SSH host keys (persisted in /data so clients don't see key changes) -----
+mkdir -p /data/ssh
+if [[ ! -f /data/ssh/ssh_host_ed25519_key ]]; then
+    bashio::log.info "Generating SSH host keys"
+    ssh-keygen -t ed25519 -f /data/ssh/ssh_host_ed25519_key -N "" >/dev/null
+fi
+if [[ ! -f /data/ssh/ssh_host_rsa_key ]]; then
+    ssh-keygen -t rsa -b 4096 -f /data/ssh/ssh_host_rsa_key -N "" >/dev/null
+fi
+chmod 600 /data/ssh/ssh_host_*_key
+chmod 644 /data/ssh/ssh_host_*_key.pub
+
+# --- authorized_keys from the push_keys option ------------------------------
+# 'restrict' disables port/agent/x11 forwarding and pty allocation; git-shell
+# still runs because sshd executes the login shell with the git command.
+AUTH_KEYS="${GIT_HOME}/.ssh/authorized_keys"
+: > "${AUTH_KEYS}"
+key_count=0
+while IFS= read -r key; do
+    [[ -z "${key}" ]] && continue
+    printf 'restrict %s\n' "${key}" >> "${AUTH_KEYS}"
+    key_count=$((key_count + 1))
+done < <(jq -r '.push_keys[]? | select(. != null and . != "")' "${OPTIONS}")
+
+if [[ "${key_count}" -eq 0 ]]; then
+    bashio::log.warning "No push_keys configured - nobody can push over SSH yet."
+else
+    bashio::log.info "Authorized ${key_count} push key(s)."
+fi
+
+# --- Ownership / permissions ------------------------------------------------
+chown -R git:git "${GIT_HOME}"
+chmod 700 "${GIT_HOME}/.ssh"
+chmod 600 "${AUTH_KEYS}"
+# StrictModes: home must not be group/other writable.
+chmod 755 "${GIT_HOME}"
+
+if bashio::var.true "${fix_permissions}"; then
+    bashio::log.info "Fixing ownership of ${REPOS_ROOT} (git:git)"
+    chown -R git:git "${REPOS_ROOT}"
+fi
+
+# git refuses to operate on repos owned by another uid ("dubious ownership").
+# Repos on /share may be created over NFS/Samba by other uids, so trust them.
+git config --system --replace-all safe.directory '*'
+
+# --- Environment for the git-shell wrapper ----------------------------------
+cat > "${GIT_HOME}/git-server.env" <<EOF
+REPOS_ROOT="${REPOS_ROOT}"
+AUTO_INIT="${auto_init}"
+EOF
+chown git:git "${GIT_HOME}/git-server.env"
+
+# --- sshd configuration -----------------------------------------------------
+mkdir -p /var/empty /run
+cat > /etc/ssh/sshd_config_cgit <<EOF
+Port 22
+AddressFamily any
+ListenAddress 0.0.0.0
+ListenAddress ::
+
+HostKey /data/ssh/ssh_host_ed25519_key
+HostKey /data/ssh/ssh_host_rsa_key
+
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+KbdInteractiveAuthentication no
+
+AllowUsers git
+AuthorizedKeysFile ${GIT_HOME}/.ssh/authorized_keys
+
+AllowTcpForwarding no
+X11Forwarding no
+PermitTTY no
+PrintMotd no
+
+PidFile /run/sshd_cgit.pid
+LogLevel INFO
+EOF
+
+# --- cgitrc -----------------------------------------------------------------
+# cgit reads cgitrc top-to-bottom and applies global settings to repos at the
+# moment it hits scan-path. Everything that should apply to every repo
+# (clone-url, enable-*, snapshots, extra_cgitrc) MUST come before scan-path,
+# which is therefore emitted last.
+{
+    echo "# Generated by cgit-setup - do not edit; change add-on options instead."
+    echo "css=/cgit.css"
+    echo "logo=/cgit.png"
+    echo "virtual-root=/"
+    echo "root-title=${root_title}"
+    echo "root-desc=${root_desc}"
+    echo "enable-index-links=1"
+    echo "enable-index-owner=0"
+    echo "enable-commit-graph=1"
+    echo "enable-log-filecount=1"
+    echo "enable-log-linecount=1"
+    echo "enable-git-config=1"
+    echo "snapshots=tar.gz zip"
+
+    if bashio::var.true "${enable_http_clone}"; then
+        echo "enable-http-clone=1"
+    else
+        echo "enable-http-clone=0"
+    fi
+
+    # clone-url is a space-separated list. cgit expands $CGIT_REPO_URL (the repo
+    # path incl. .git) and $HTTP_HOST (the host:port the browser used) at
+    # request time. Do NOT set remove-suffix: it blanks $CGIT_REPO_URL and
+    # rewrites browse URLs to drop .git.
+    clone_urls=()
+    if [[ -n "${clone_url_ssh}" ]]; then
+        base="${clone_url_ssh%/}"
+        clone_urls+=("${base}/\$CGIT_REPO_URL")
+    fi
+    if bashio::var.true "${enable_http_clone}"; then
+        clone_urls+=("http://\$HTTP_HOST/\$CGIT_REPO_URL")
+    fi
+    if [[ "${#clone_urls[@]}" -gt 0 ]]; then
+        echo "clone-url=${clone_urls[*]}"
+    fi
+
+    if [[ -n "${extra_cgitrc}" ]]; then
+        echo "# --- extra_cgitrc ---"
+        echo "${extra_cgitrc}"
+    fi
+
+    # Must be last: repos are scanned here with the settings above as defaults.
+    echo "scan-path=${REPOS_ROOT}"
+} > /etc/cgitrc
+
+# --- lighttpd configuration -------------------------------------------------
+# Runs as the git user so it can read repos owned by git without world perms.
+cat > /etc/lighttpd/lighttpd.conf <<EOF
+server.modules = (
+    "mod_cgi",
+    "mod_alias",
+    "mod_rewrite",
+    "mod_setenv",
+    "mod_accesslog",
+)
+
+server.document-root = "/usr/share/webapps/cgit"
+server.port         = 80
+server.bind         = "0.0.0.0"
+server.username     = "git"
+server.groupname    = "git"
+server.upload-dirs  = ( "/tmp" )
+server.pid-file     = "/run/lighttpd.pid"
+# No server.errorlog: lighttpd keeps the inherited stderr (captured by s6).
+# Reopening /dev/stderr would fail after dropping privileges to the git user.
+accesslog.filename  = "/dev/stdout"
+
+mimetype.assign = (
+    ".css"  => "text/css",
+    ".png"  => "image/png",
+    ".html" => "text/html",
+    ".txt"  => "text/plain",
+)
+
+# Smart HTTP (clone/fetch) is routed to git-http-backend through a synthetic
+# /_githttp alias prefix - an empty-prefix alias makes lighttpd answer 403
+# before the CGI runs. The query string is re-appended (\$2) because
+# url.rewrite-once matches path+query and would otherwise drop ?service=...,
+# which silently downgrades git to the dumb protocol.
+#
+# git-http-backend only permits push when a repo sets http.receivepack=true,
+# which this add-on never does -> HTTP stays read-only; push goes over SSH.
+alias.url += ( "/_githttp" => "/usr/libexec/git-core/git-http-backend" )
+url.rewrite-once = (
+    "^/(.+\.git/(?:info/refs|git-upload-pack|git-receive-pack|HEAD|objects/.*))(?:\?(.*))?\$" => "/_githttp/\$1?\$2",
+    "^/(cgit\.(?:css|png))(?:\?.*)?\$" => "/\$1",
+    "^/(.*)\$" => "/cgit.cgi/\$1"
+)
+
+\$HTTP["url"] =~ "^/_githttp" {
+    cgi.assign = ( "" => "" )
+    setenv.add-environment = (
+        "GIT_PROJECT_ROOT"    => "${REPOS_ROOT}",
+        "GIT_HTTP_EXPORT_ALL" => "1",
+    )
+}
+
+\$HTTP["url"] =~ "^/cgit\.cgi" {
+    cgi.assign = ( "cgit.cgi" => "" )
+}
+EOF
+
+bashio::log.info "Setup complete."

@@ -1,0 +1,10 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Git over SSH: sshd restricted to the 'git' user via git-shell-wrapper.
+# init-cgit has already written /etc/ssh/sshd_config_cgit, generated host keys
+# in /data/ssh, and populated the git user's authorized_keys.
+# ==============================================================================
+bashio::log.info "Starting sshd (git push/fetch over SSH) on port 22"
+
+# -D = foreground (s6 supervision), -e = log to stderr so it reaches the HA log.
+exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config_cgit
