@@ -1,0 +1,21 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Syncthing daemon. init-syncthing has already created /data/config (identity +
+# config.xml) and /data/db (index database).
+#
+# --no-restart  s6 owns the restart policy; syncthing's own monitor process must
+#               not fight it. A config change that needs a restart makes
+#               syncthing exit(3) and s6 brings it straight back up.
+# --no-upgrade  the binary comes from apk, self-upgrading would break the image.
+# ==============================================================================
+bashio::log.info "Starting Syncthing on port 8384 (ingress)"
+
+exec syncthing serve \
+    --config /data/config \
+    --data /data/db \
+    --gui-address 0.0.0.0:8384 \
+    --no-browser \
+    --no-restart \
+    --no-upgrade \
+    --no-port-probing \
+    --log-format-timestamp=

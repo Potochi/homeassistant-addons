@@ -1,0 +1,8 @@
+build_from:
+  aarch64: ghcr.io/home-assistant/aarch64-base:3.23
+  amd64: ghcr.io/home-assistant/amd64-base:3.23
+labels:
+  org.opencontainers.image.title: Syncthing
+  org.opencontainers.image.description: Syncthing peer for Home Assistant with a pinnable device identity
+  org.opencontainers.image.source: https://github.com/Potochi/homeassistant-addons
+  org.opencontainers.image.licenses: MPL-2.0

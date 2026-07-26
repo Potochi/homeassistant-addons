@@ -1,0 +1,236 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Pushes the declarative part of the add-on options into the running Syncthing
+# over its REST API, the same way the NixOS / home-manager module does it.
+#
+# Objects are merged, not replaced: an existing device or folder is used as the
+# base and only the keys covered by an option are overwritten, so anything you
+# tweak in the web UI survives a restart. Removing an entry from the options
+# only deletes it when override_devices / override_folders is on.
+# ==============================================================================
+set -eo pipefail
+
+readonly API="http://127.0.0.1:8384"
+readonly CONFIG_XML="/data/config/config.xml"
+readonly OPTIONS="/data/options.json"
+readonly ID_FILE="/config/device-id.txt"
+
+opt() {
+    jq -r "${1} // empty" "${OPTIONS}"
+}
+
+opt_bool() {
+    jq -r "if ${1} == true then \"true\" else \"false\" end" "${OPTIONS}"
+}
+
+APIKEY="$(sed -n 's|.*<apikey>\(.*\)</apikey>.*|\1|p' "${CONFIG_XML}" | head -n1)"
+if [[ -z "${APIKEY}" ]]; then
+    bashio::exit.nok "Could not read the REST API key from ${CONFIG_XML}"
+fi
+readonly APIKEY
+
+# st <method> <path> [curl args...]
+st() {
+    local method="${1}"
+    local path="${2}"
+    shift 2
+    curl -fsS -m 30 -X "${method}" \
+        -H "X-API-Key: ${APIKEY}" \
+        -H "Content-Type: application/json" \
+        "$@" "${API}${path}"
+}
+
+# ------------------------------------------------------------------------------
+# Wait for the API. s6 starts this oneshot right after the daemon, so the first
+# few attempts are expected to fail.
+# ------------------------------------------------------------------------------
+for _ in $(seq 1 120); do
+    if st GET /rest/system/ping > /dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+if ! st GET /rest/system/ping > /dev/null 2>&1; then
+    bashio::exit.nok "Syncthing did not answer on ${API} within 120s"
+fi
+
+MYID="$(st GET /rest/system/status | jq -r '.myID')"
+readonly MYID
+
+# ------------------------------------------------------------------------------
+# This device: name and global options.
+# ------------------------------------------------------------------------------
+st PATCH "/rest/config/devices/${MYID}" \
+    -d "$(jq -nc --arg name "$(opt '.device_name')" '{name: $name}')" > /dev/null
+
+st PATCH /rest/config/options -d "$(jq -nc \
+    --argjson local "$(opt_bool '.local_discovery')" \
+    --argjson global "$(opt_bool '.global_discovery')" \
+    --argjson relays "$(opt_bool '.relays_enabled')" \
+    --argjson nat "$(opt_bool '.nat_traversal')" \
+    '{
+        localAnnounceEnabled: $local,
+        globalAnnounceEnabled: $global,
+        relaysEnabled: $relays,
+        natEnabled: $nat
+    }')" > /dev/null
+
+# Decline usage reporting while it is still undecided, so the GUI stops nagging.
+# An explicit choice made in the web UI is left alone.
+if [[ "$(st GET /rest/config/options | jq -r '.urAccepted')" == "0" ]]; then
+    st PATCH /rest/config/options -d '{"urAccepted": -1}' > /dev/null
+fi
+
+# Folders offered by an introducer peer land under folder_root/<label>.
+st PATCH /rest/config/defaults/folder \
+    -d "$(jq -nc --arg path "$(opt '.folder_root')" '{path: $path}')" > /dev/null
+
+# ------------------------------------------------------------------------------
+# Peers.
+# ------------------------------------------------------------------------------
+peer_count=0
+while IFS= read -r peer; do
+    [[ -z "${peer}" ]] && continue
+
+    id="$(jq -r '.id' <<< "${peer}")"
+    base="$(st GET "/rest/config/devices/${id}" 2> /dev/null || st GET /rest/config/defaults/device)"
+
+    overlay="$(jq -c '
+        {deviceID: .id, name: (.name // ("peer-" + .id[0:7]))}
+        + (if .addresses then {addresses: .addresses} else {} end)
+        + (if .introducer != null then {introducer: .introducer} else {} end)
+        + (if .auto_accept_folders != null then {autoAcceptFolders: .auto_accept_folders} else {} end)
+        + (if .compression then {compression: .compression} else {} end)
+        + (if .untrusted != null then {untrusted: .untrusted} else {} end)
+        + (if .paused != null then {paused: .paused} else {} end)
+    ' <<< "${peer}")"
+
+    st POST /rest/config/devices \
+        -d "$(jq -nc --argjson base "${base}" --argjson overlay "${overlay}" '$base + $overlay')" > /dev/null
+
+    bashio::log.info "Peer ${id:0:7}… configured ($(jq -r '.name' <<< "${overlay}"))"
+    peer_count=$((peer_count + 1))
+done < <(jq -c '.peers[]?' "${OPTIONS}")
+
+# Map peer names onto device IDs so folders can refer to either.
+PEER_IDS="$(jq -c '[.peers[]? | {key: (.name // .id), value: .id}] | from_entries' "${OPTIONS}")"
+readonly PEER_IDS
+
+# ------------------------------------------------------------------------------
+# Folders.
+# ------------------------------------------------------------------------------
+folder_count=0
+while IFS= read -r folder; do
+    [[ -z "${folder}" ]] && continue
+
+    id="$(jq -r '.id' <<< "${folder}")"
+    base="$(st GET "/rest/config/folders/${id}" 2> /dev/null || st GET /rest/config/defaults/folder)"
+
+    overlay="$(jq -c --arg myid "${MYID}" --argjson peers "${PEER_IDS}" '
+        {
+            id: .id,
+            label: (.label // .id),
+            path: .path,
+            devices: (
+                [{deviceID: $myid}]
+                + [(.devices // [])[] | {deviceID: ($peers[.] // .)}]
+                | unique_by(.deviceID)
+            )
+        }
+        + (if .type then {type: .type} else {} end)
+        + (if .rescan_interval then {rescanIntervalS: .rescan_interval} else {} end)
+        + (if .fs_watcher != null then {fsWatcherEnabled: .fs_watcher} else {} end)
+        + (if .ignore_perms != null then {ignorePerms: .ignore_perms} else {} end)
+        + (
+            if (.versioning // "none") == "none" then
+                {}
+            elif .versioning == "trashcan" then
+                {versioning: {type: "trashcan", params: {cleanoutDays: ((.versioning_param // 14) | tostring)}, cleanupIntervalS: 3600, fsPath: "", fsType: "basic"}}
+            elif .versioning == "simple" then
+                {versioning: {type: "simple", params: {keep: ((.versioning_param // 5) | tostring)}, cleanupIntervalS: 3600, fsPath: "", fsType: "basic"}}
+            else
+                {versioning: {type: "staggered", params: {maxAge: (((.versioning_param // 365) * 86400) | tostring)}, cleanupIntervalS: 3600, fsPath: "", fsType: "basic"}}
+            end
+        )
+    ' <<< "${folder}")"
+
+    st POST /rest/config/folders \
+        -d "$(jq -nc --argjson base "${base}" --argjson overlay "${overlay}" '$base + $overlay')" > /dev/null
+
+    bashio::log.info "Folder '${id}' configured at $(jq -r '.path' <<< "${overlay}")"
+    folder_count=$((folder_count + 1))
+done < <(jq -c '.folders[]?' "${OPTIONS}")
+
+# ------------------------------------------------------------------------------
+# Pruning. Off by default, because it also removes anything added from the web
+# UI or introduced by a peer.
+# ------------------------------------------------------------------------------
+if [[ "$(opt_bool '.override_devices')" == "true" ]]; then
+    stale_devices="$(st GET /rest/config/devices | jq -r \
+        --arg myid "${MYID}" \
+        --argjson declared "$(jq -c '[.peers[]?.id]' "${OPTIONS}")" \
+        '.[] | .deviceID as $id
+             | select($id != $myid)
+             | select(($declared | index($id)) == null)
+             | $id')"
+
+    while IFS= read -r id; do
+        [[ -z "${id}" ]] && continue
+        bashio::log.warning "Removing peer ${id:0:7}… (not in the options, override_devices is on)"
+        st DELETE "/rest/config/devices/${id}" > /dev/null
+    done <<< "${stale_devices}"
+fi
+
+if [[ "$(opt_bool '.override_folders')" == "true" ]]; then
+    stale_folders="$(st GET /rest/config/folders | jq -r \
+        --argjson declared "$(jq -c '[.folders[]?.id]' "${OPTIONS}")" \
+        '.[] | .id as $id
+             | select(($declared | index($id)) == null)
+             | $id')"
+
+    while IFS= read -r id; do
+        [[ -z "${id}" ]] && continue
+        bashio::log.warning "Removing folder '${id}' (not in the options, override_folders is on)"
+        st DELETE "/rest/config/folders/${id}" > /dev/null
+    done <<< "${stale_folders}"
+fi
+
+# ------------------------------------------------------------------------------
+# GUI credentials. Only applied when both options are set; clearing them here
+# would silently undo a password set in the web UI.
+# ------------------------------------------------------------------------------
+gui_user="$(opt '.gui_user')"
+gui_password="$(opt '.gui_password')"
+
+if [[ -n "${gui_user}" && -n "${gui_password}" ]]; then
+    st PATCH /rest/config/gui -d "$(jq -nc \
+        --arg user "${gui_user}" \
+        --arg password "${gui_password}" \
+        '{user: $user, password: $password}')" > /dev/null
+    bashio::log.info "GUI authentication enabled for user '${gui_user}'"
+elif [[ -n "${gui_user}" || -n "${gui_password}" ]]; then
+    bashio::log.warning "GUI authentication needs both 'gui_user' and 'gui_password'; ignoring."
+fi
+
+# ------------------------------------------------------------------------------
+# Report the device ID and restart if Syncthing asked for it.
+# ------------------------------------------------------------------------------
+if [[ -d "$(dirname "${ID_FILE}")" ]]; then
+    printf '%s\n' "${MYID}" > "${ID_FILE}"
+    id_location="${ID_FILE} (addon_configs/*_syncthing/device-id.txt)"
+else
+    printf '%s\n' "${MYID}" > /data/device-id.txt
+    id_location="/data/device-id.txt"
+fi
+
+bashio::log.info "------------------------------------------------------------"
+bashio::log.info "Device ID: ${MYID}"
+bashio::log.info "Also written to ${id_location}"
+bashio::log.info "${peer_count} peer(s), ${folder_count} folder(s) from the options"
+bashio::log.info "------------------------------------------------------------"
+
+if [[ "$(st GET /rest/config/restart-required | jq -r '.requiresRestart')" == "true" ]]; then
+    bashio::log.info "Restarting Syncthing to activate the new configuration"
+    st POST /rest/system/restart > /dev/null
+fi

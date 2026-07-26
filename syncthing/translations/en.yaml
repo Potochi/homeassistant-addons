@@ -1,0 +1,81 @@
+configuration:
+  device_name:
+    name: Device name
+    description: >-
+      Name this instance shows up as on your other machines. Cosmetic only.
+  folder_root:
+    name: Folder root
+    description: >-
+      Where folders offered by an introducer peer are created, as
+      <folder root>/<folder label>. Keep it inside /share, /media or /backup so
+      it survives an add-on update.
+  cert_pem:
+    name: Device certificate (cert.pem)
+    description: >-
+      Pins the device identity. Either the PEM block itself or the path to a
+      file holding it (for example /ssl/syncthing/cert.pem). Leave both this and
+      the key empty to let Syncthing generate an identity on first start. The
+      device ID is derived from this certificate, so pinning it lets your NixOS
+      or nix-darwin flake declare this instance before it has ever run.
+  key_pem:
+    name: Device key (key.pem)
+    description: >-
+      Private key matching the certificate, as a PEM block or a path to a file.
+      Never share this; anyone holding it can impersonate this device.
+  peers:
+    name: Peers
+    description: >-
+      Machines to sync with. Each entry needs the peer's device ID; name,
+      addresses, introducer and auto_accept_folders are optional. Set
+      introducer and auto_accept_folders on your main machine to let it push
+      new folders here without touching this add-on's configuration.
+  folders:
+    name: Folders
+    description: >-
+      Folders managed from here instead of from a peer. Each entry needs an id
+      and a path; devices lists the peers to share with, by name or device ID.
+      Leave empty when an introducer peer defines the folders.
+  override_devices:
+    name: Remove undeclared peers
+    description: >-
+      Delete peers that are not in the list above, including ones added in the
+      web UI or introduced by another device. Off by default.
+  override_folders:
+    name: Remove undeclared folders
+    description: >-
+      Delete folders that are not in the list above, including auto-accepted
+      ones. Off by default. This only removes the folder from Syncthing; the
+      files stay on disk.
+  gui_user:
+    name: Web UI username
+    description: >-
+      Optional. The web UI is already behind Home Assistant's login when opened
+      through the sidebar, so this is only needed if you expose port 8384.
+  gui_password:
+    name: Web UI password
+    description: >-
+      Optional, required together with the username. Adds a second login prompt
+      inside the Home Assistant panel.
+  local_discovery:
+    name: Local discovery
+    description: >-
+      Announce on the local network. Of limited use here because the add-on runs
+      on Home Assistant's internal bridge network; give your peers this
+      machine's address instead.
+  global_discovery:
+    name: Global discovery
+    description: >-
+      Look peers up through the public Syncthing discovery servers.
+  relays_enabled:
+    name: Relays
+    description: >-
+      Fall back to public relay servers when no direct connection can be made.
+      Traffic stays end-to-end encrypted.
+  nat_traversal:
+    name: NAT traversal
+    description: >-
+      Ask the router for a port mapping over UPnP or NAT-PMP.
+network:
+  22000/tcp: Sync protocol (TCP)
+  22000/udp: Sync protocol (QUIC)
+  21027/udp: Local discovery

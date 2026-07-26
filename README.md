@@ -8,6 +8,7 @@ A collection of Home Assistant apps (add-ons).
 | **Calibre Server** | [`calibre-server/`](calibre-server/) | Headless Calibre content server for your e-book library. |
 | **CUPS** | [`cups-airprint/`](cups-airprint/) | CUPS print server with working AirPrint. |
 | **CGit Server** | [`cgit/`](cgit/) | Browse git repositories with cgit and push over SSH with a shared key set. Repos live inside `/share`. |
+| **Syncthing** | [`syncthing/`](syncthing/) | Continuous file sync with your other machines. Pinnable device identity, so a NixOS/nix-darwin flake can declare it as a peer up front. |
 
 ## Installation
 

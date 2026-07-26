@@ -1,0 +1,99 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Prepares Syncthing's home before the daemon starts:
+#   - installs a pinned device identity (cert.pem / key.pem) when supplied
+#   - creates config.xml on first boot (and migrates it on later boots)
+#   - creates the folder root and every declared folder path
+#
+# Everything that can be changed while running (devices, folders, GUI auth,
+# discovery) is applied over the REST API by syncthing-apply instead.
+#
+# Options are read straight from /data/options.json rather than through
+# bashio::config, which goes via the Supervisor API and caches its answer.
+# ==============================================================================
+set -e
+
+readonly CONFIG_DIR=/data/config
+readonly DB_DIR=/data/db
+readonly OPTIONS=/data/options.json
+
+opt() {
+    jq -r "${1} // empty" "${OPTIONS}"
+}
+
+readonly FOLDER_ROOT="$(opt '.folder_root')"
+if [[ -z "${FOLDER_ROOT}" ]]; then
+    bashio::exit.nok "Option 'folder_root' is empty"
+fi
+
+mkdir -p "${CONFIG_DIR}" "${DB_DIR}"
+chmod 700 "${CONFIG_DIR}"
+
+# ------------------------------------------------------------------------------
+# Identity. The option value is either the PEM itself or a path to a file
+# holding it, so the key can live in /ssl or /share instead of options.json.
+# ------------------------------------------------------------------------------
+install_pem() {
+    local option="${1}"
+    local dest="${2}"
+    local value
+
+    value="$(opt ".${option}")"
+
+    if [[ "${value}" == "-----BEGIN"* ]]; then
+        printf '%s\n' "${value}" > "${dest}"
+    elif [[ -f "${value}" ]]; then
+        cat "${value}" > "${dest}"
+    else
+        bashio::exit.nok \
+            "Option '${option}' is neither a PEM block nor an existing file: ${value}"
+    fi
+
+    chmod 600 "${dest}"
+}
+
+cert_pem="$(opt '.cert_pem')"
+key_pem="$(opt '.key_pem')"
+
+if [[ -n "${cert_pem}" || -n "${key_pem}" ]]; then
+    if [[ -z "${cert_pem}" || -z "${key_pem}" ]]; then
+        bashio::exit.nok \
+            "A pinned identity needs both 'cert_pem' and 'key_pem'. Set both, or clear both to let Syncthing generate one."
+    fi
+
+    install_pem 'cert_pem' "${CONFIG_DIR}/cert.pem"
+    install_pem 'key_pem' "${CONFIG_DIR}/key.pem"
+    bashio::log.info "Installed the pinned device identity from the add-on options"
+elif [[ -f "${CONFIG_DIR}/cert.pem" ]]; then
+    bashio::log.info "Using the device identity generated on first start"
+else
+    bashio::log.notice "No identity pinned; Syncthing will generate one. Pin 'cert_pem'/'key_pem' to keep the device ID across a reinstall."
+fi
+
+# ------------------------------------------------------------------------------
+# Config file. 'generate' creates it on first boot, and on later boots validates
+# it and fills in defaults for options added by a newer Syncthing. It never
+# touches an existing certificate.
+# ------------------------------------------------------------------------------
+syncthing generate \
+    --config "${CONFIG_DIR}" \
+    --data "${DB_DIR}" \
+    --no-port-probing
+
+# ------------------------------------------------------------------------------
+# Folder paths. Auto-accepted folders land under folder_root; declared folders
+# get their own path created so Syncthing can drop its .stfolder marker.
+# ------------------------------------------------------------------------------
+mkdir -p "${FOLDER_ROOT}"
+
+while IFS= read -r path; do
+    [[ -z "${path}" ]] && continue
+    if [[ "${path}" != /share/* && "${path}" != /media/* && "${path}" != /homeassistant/* \
+       && "${path}" != /config/* && "${path}" != /backup/* && "${path}" != /data/* ]]; then
+        bashio::log.warning \
+            "Folder path '${path}' is outside the mapped directories (/share, /media, /homeassistant, /config, /backup) and will not survive a restart."
+    fi
+    mkdir -p "${path}"
+done < <(jq -r '.folders[]?.path // empty' "${OPTIONS}")
+
+bashio::log.info "Syncthing home is ready (config: ${CONFIG_DIR}, database: ${DB_DIR})"
