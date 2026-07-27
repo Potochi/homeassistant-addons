@@ -43,6 +43,10 @@ live in a folder inside `/share`, so you can also reach them over NFS or Samba
 repos_dir: git
 push_keys:
   - "ssh-ed25519 AAAA... you@laptop"
+require_signed_commits: true
+allowed_signers:
+  - "you@laptop ssh-ed25519 AAAA..."
+gpg_public_keys: []
 auto_init: true
 root_title: Git repositories
 root_desc: Hosted on Home Assistant
@@ -58,6 +62,9 @@ extra_cgitrc: ""
 | --- | --- | --- | --- |
 | `repos_dir` | str | `git` | Subfolder of `/share` that holds the bare repositories, e.g. `git` serves `/share/git`. Nested paths are allowed; `..` is not. Created on first start. |
 | `push_keys` | list | `[]` | SSH **public** keys allowed to push and fetch over SSH. One line per key, in `authorized_keys` format. All keys have full access to all repositories. |
+| `require_signed_commits` | bool | `true` | Reject pushes that introduce commits without a valid signature from a trusted key (see [Requiring signed commits](#requiring-signed-commits)). |
+| `allowed_signers` | list | `[]` | SSH public keys trusted for **commit signatures**, in `allowed-signers` format (`principal key-type key`). A plain public key line is accepted and gets a `*` (any principal) prepended. |
+| `gpg_public_keys` | list | `[]` | ASCII-armored OpenPGP public key blocks trusted for commit signatures, one block per entry. |
 | `auto_init` | bool | `true` | Create a bare repository automatically on the first push to a name that does not exist yet. When `false`, pushing to a missing repo is refused. |
 | `root_title` | str | `Git repositories` | Heading shown at the top of the cgit index page. |
 | `root_desc` | str | `Hosted on Home Assistant` | Sub-heading under the title. |
@@ -79,6 +86,45 @@ cat ~/.ssh/id_ed25519.pub      # or id_rsa.pub
 
 Paste that whole line into `push_keys`. If you don't have a key yet,
 `ssh-keygen -t ed25519` creates one. Never paste a **private** key.
+
+## Requiring signed commits
+
+With `require_signed_commits` on (the default), a server-side `pre-receive`
+hook rejects any push that introduces a commit without a valid signature from a
+trusted key. Trusted keys are declared in the add-on options:
+
+- `allowed_signers` — for commits signed with an **SSH key**. Each entry is an
+  [allowed-signers](https://man.openbsd.org/ssh-keygen#ALLOWED_SIGNERS) line
+  (`principal key-type key`). You can paste a plain `.pub` line instead; the
+  add-on prepends `*` so it matches any committer identity.
+- `gpg_public_keys` — for commits signed with an **OpenPGP key**. Each entry is
+  one ASCII-armored public key block (`gpg --armor --export you@example.com`).
+
+To sign with your existing SSH key on the machine you push from:
+
+```sh
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+```
+
+Then add the same `.pub` line to `allowed_signers`. Note that `push_keys` and
+`allowed_signers` are separate on purpose: one controls who may *connect*, the
+other whose *signatures* are trusted — even if you use the same key for both.
+
+Details of the policy:
+
+- Only commits **new to the repository** are checked. Existing history and
+  commits already reachable from another branch are never re-judged, so
+  enabling the option on a live server does not lock out old repositories.
+- Ref deletions and tags pointing at already-accepted commits pass. The tag
+  object itself is not required to be signed — the policy is about commits.
+- The trusted key set is rebuilt from the options on every add-on start;
+  removing a key there revokes it on the next restart.
+- Enforcement happens on the SSH push path (the only writable path — HTTP is
+  read-only). Writing to the bare repositories directly over NFS/Samba bypasses
+  the hook, like it bypasses every other server-side check.
+- Set `require_signed_commits: false` to accept unsigned pushes again.
 
 ## Networking
 
@@ -142,3 +188,8 @@ front it with a VPN or reverse proxy and treat the SSH keys as the only gate.
   pushed. If you seeded a bare repo manually, set its `HEAD` to an existing
   branch (`git symbolic-ref HEAD refs/heads/main`).
 - **Push over HTTP fails** — that's intended; HTTP is read-only. Push over SSH.
+- **Push rejected with `this server only accepts signed commits`** — the
+  commits are unsigned, or signed with a key that isn't in `allowed_signers` /
+  `gpg_public_keys`. Configure signing (see above), rewrite the offending
+  commits (`git rebase --exec 'git commit --amend --no-edit -S'`), and push
+  again — or set `require_signed_commits: false`.

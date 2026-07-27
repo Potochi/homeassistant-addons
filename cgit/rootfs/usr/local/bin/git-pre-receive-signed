@@ -1,0 +1,73 @@
+#!/bin/sh
+# ==============================================================================
+# pre-receive hook: refuse pushes that introduce unsigned or untrusted commits.
+#
+# Installed as <repo>/hooks/pre-receive (symlink) by git-shell-wrapper before
+# every push, so repos seeded over NFS/Samba get it too. Reads REQUIRE_SIGNED
+# from the env file written by cgit-setup, so toggling the add-on option takes
+# effect on the next push without touching any repository.
+#
+# Only commits NEW to the repository are checked (rev-list <new> --not --all):
+# history that predates the policy, or is already reachable from another ref,
+# is never re-judged. Ref deletions pass. Verification runs through
+# 'git verify-commit', which handles both OpenPGP signatures (against the keys
+# imported from gpg_public_keys) and SSH signatures (against the
+# allowed_signers file via gpg.ssh.allowedSignersFile in /etc/gitconfig).
+# ==============================================================================
+set -eu
+
+ENV_FILE="${HOME:-/data/git}/git-server.env"
+# shellcheck disable=SC1090
+[ -f "${ENV_FILE}" ] && . "${ENV_FILE}"
+: "${REQUIRE_SIGNED:=false}"
+
+case "${REQUIRE_SIGNED}" in
+    true|True|1) ;;
+    *) cat > /dev/null; exit 0 ;;   # policy disabled - drain stdin, allow
+esac
+
+# Collect the target oid of every updated ref; the all-zero oid is a deletion.
+news=""
+while read -r _old new _ref; do
+    case "${new}" in
+        *[!0]*) news="${news} ${new}" ;;
+    esac
+done
+[ -n "${news}" ] || exit 0
+
+# shellcheck disable=SC2086
+commits=$(git rev-list ${news} --not --all) || {
+    echo "policy: failed to enumerate pushed commits" >&2
+    exit 1
+}
+[ -n "${commits}" ] || exit 0
+
+bad=0
+ok=0
+for commit in ${commits}; do
+    if out=$(git verify-commit "${commit}" 2>&1); then
+        ok=$((ok + 1))
+        continue
+    fi
+    if [ "${bad}" -eq 0 ]; then
+        echo "------------------------------------------------------------------" >&2
+        echo "REJECTED: this server only accepts signed commits." >&2
+        echo "" >&2
+    fi
+    bad=$((bad + 1))
+    echo "unsigned or untrusted: $(git log -1 --format='%h %s (%an)' "${commit}")" >&2
+    [ -n "${out}" ] && printf '%s\n' "${out}" | sed 's/^/    /' >&2
+done
+
+if [ "${bad}" -gt 0 ]; then
+    echo "" >&2
+    echo "Sign your commits (e.g. 'git config commit.gpgsign true') with a key" >&2
+    echo "listed in the add-on's allowed_signers or gpg_public_keys options," >&2
+    echo "then rewrite the offending commits (git rebase --exec 'git commit" >&2
+    echo "--amend --no-edit -S' or git commit --amend -S) and push again." >&2
+    echo "------------------------------------------------------------------" >&2
+    exit 1
+fi
+
+echo "policy: ${ok} new signed commit(s) verified" >&2
+exit 0

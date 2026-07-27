@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/apps/configuration
 name: CGit Server
-version: "1.0.0"
+version: "1.1.0"
 slug: cgit
 description: >-
   Browse git repositories in your browser with cgit and push over SSH with a
@@ -26,6 +26,9 @@ map:
 options:
   repos_dir: git
   push_keys: []
+  require_signed_commits: true
+  allowed_signers: []
+  gpg_public_keys: []
   auto_init: true
   root_title: Git repositories
   root_desc: Hosted on Home Assistant
@@ -38,6 +41,11 @@ options:
 schema:
   repos_dir: str
   push_keys:
+    - str
+  require_signed_commits: bool
+  allowed_signers:
+    - str
+  gpg_public_keys:
     - str
   auto_init: bool
   root_title: str

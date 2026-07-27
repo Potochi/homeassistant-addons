@@ -21,6 +21,7 @@ fix_permissions="$(opt '.fix_permissions != false')"
 git_uid="$(opt '.git_uid // 1000')"
 git_gid="$(opt '.git_gid // 1000')"
 extra_cgitrc="$(opt '.extra_cgitrc // ""')"
+require_signed="$(opt '.require_signed_commits != false')"
 
 # --- Validate and resolve the repository root under /share -------------------
 while [[ "${repos_dir}" == /* ]]; do repos_dir="${repos_dir#/}"; done
@@ -83,6 +84,52 @@ else
     bashio::log.info "Authorized ${key_count} push key(s)."
 fi
 
+# --- Signed-commit policy ----------------------------------------------------
+# Trusted keys are rebuilt from the options on every start, so the options are
+# authoritative: a key removed there stops being trusted on the next restart.
+SIGNERS_FILE="${GIT_HOME}/allowed-signers"
+GNUPG_DIR="${GIT_HOME}/.gnupg"
+
+# allowed_signers: ssh-keygen(1) ALLOWED SIGNERS lines. Entries pasted straight
+# from a *.pub file (starting with the key type) get a '*' principal prepended
+# so any committer identity matches.
+: > "${SIGNERS_FILE}"
+signer_count=0
+while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    case "${line}" in
+        ssh-*|ecdsa-*|sk-*) line="* ${line}" ;;
+    esac
+    printf '%s\n' "${line}" >> "${SIGNERS_FILE}"
+    signer_count=$((signer_count + 1))
+done < <(jq -r '.allowed_signers[]? | select(. != null and . != "")' "${OPTIONS}")
+
+# gpg_public_keys: armored public key blocks, imported into a keyring that is
+# recreated from scratch each start.
+rm -rf "${GNUPG_DIR}"
+gpg_count="$(jq -r '[.gpg_public_keys[]? | select(. != null and . != "")] | length' "${OPTIONS}")"
+if [[ "${gpg_count}" -gt 0 ]]; then
+    mkdir -p "${GNUPG_DIR}"
+    chmod 700 "${GNUPG_DIR}"
+    if ! jq -r '.gpg_public_keys[]? | select(. != null and . != "")' "${OPTIONS}" \
+            | GNUPGHOME="${GNUPG_DIR}" gpg --batch --quiet --import; then
+        bashio::log.warning "Some gpg_public_keys entries failed to import."
+    fi
+fi
+
+# git verify-commit resolves SSH signatures through this file (system-wide so
+# the pre-receive hook picks it up without per-repo config).
+git config --system --replace-all gpg.ssh.allowedSignersFile "${SIGNERS_FILE}"
+
+if bashio::var.true "${require_signed}"; then
+    if [[ "${signer_count}" -eq 0 && "${gpg_count}" -eq 0 ]]; then
+        bashio::log.warning \
+            "require_signed_commits is on but neither allowed_signers nor gpg_public_keys is configured - every push will be rejected."
+    else
+        bashio::log.info "Signed commits required (${signer_count} SSH signer(s), ${gpg_count} GPG key block(s))."
+    fi
+fi
+
 # --- Ownership / permissions ------------------------------------------------
 chown -R git:git "${GIT_HOME}"
 chmod 700 "${GIT_HOME}/.ssh"
@@ -103,6 +150,7 @@ git config --system --replace-all safe.directory '*'
 cat > "${GIT_HOME}/git-server.env" <<EOF
 REPOS_ROOT="${REPOS_ROOT}"
 AUTO_INIT="${auto_init}"
+REQUIRE_SIGNED="${require_signed}"
 EOF
 chown git:git "${GIT_HOME}/git-server.env"
 

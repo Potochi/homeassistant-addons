@@ -10,6 +10,25 @@ configuration:
       SSH public keys allowed to push and fetch over SSH, one per entry in
       authorized_keys format (e.g. "ssh-ed25519 AAAA... you@laptop"). Every key
       can access every repository. Paste public keys only, never private keys.
+  require_signed_commits:
+    name: Require signed commits
+    description: >-
+      Reject pushes that introduce commits without a valid signature from a
+      trusted key. Trusted keys come from allowed_signers (SSH signatures) and
+      gpg_public_keys (OpenPGP). Only commits new to the repository are
+      checked, so pre-existing history keeps working.
+  allowed_signers:
+    name: Allowed signers (SSH signing keys)
+    description: >-
+      SSH public keys trusted for commit signatures, one per entry, in
+      allowed-signers format ("principal ssh-ed25519 AAAA..."). A plain public
+      key line without a principal is accepted too. Only used when
+      require_signed_commits is on.
+  gpg_public_keys:
+    name: Trusted GPG public keys
+    description: >-
+      ASCII-armored OpenPGP public key blocks trusted for commit signatures,
+      one block per entry. Only used when require_signed_commits is on.
   auto_init:
     name: Auto-create repositories
     description: >-

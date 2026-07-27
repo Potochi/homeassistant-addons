@@ -90,6 +90,16 @@ if [ "${verb}" != "receive-pack" ]; then
     exec git "${verb}" "${abspath}"
 fi
 
+# Ensure the signed-commit policy hook is installed. Runs before every push so
+# repositories seeded over NFS/Samba (or created before this add-on version)
+# get it too. A regular-file hook a user placed by hand is left alone; the hook
+# itself no-ops when require_signed_commits is off.
+hookdir="${abspath}/hooks"
+if [ -L "${hookdir}/pre-receive" ] || [ ! -e "${hookdir}/pre-receive" ]; then
+    mkdir -p "${hookdir}"
+    ln -sf /usr/local/bin/git-pre-receive-signed "${hookdir}/pre-receive"
+fi
+
 # For push, run (don't exec) so we can repair HEAD afterwards. A freshly
 # auto-init'd bare repo has HEAD -> refs/heads/master; if the client pushed a
 # differently named default branch (e.g. main), HEAD dangles and HTTP clients
