@@ -1,0 +1,13 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Avahi carries the mDNS announcement that makes the scanner show up by itself
+# in macOS Image Capture, iOS, Windows and the Mopria app. Without it AirSane
+# still serves eSCL, but every client has to be pointed at it by hand.
+# ==============================================================================
+until [ -e /run/dbus/system_bus_socket ]; do
+    sleep 1
+done
+
+bashio::log.info "Starting Avahi daemon"
+
+exec avahi-daemon --no-chroot

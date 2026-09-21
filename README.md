@@ -9,6 +9,7 @@ A collection of Home Assistant apps (add-ons).
 | **CUPS** | [`cups-airprint/`](cups-airprint/) | CUPS print server with working AirPrint. |
 | **CGit Server** | [`cgit/`](cgit/) | Browse git repositories with cgit and push over SSH with a shared key set. Repos live inside `/share`. |
 | **Syncthing** | [`syncthing/`](syncthing/) | Continuous file sync with your other machines. Pinnable device identity, so a NixOS/nix-darwin flake can declare it as a peer up front. |
+| **Scanner Server** | [`scanner-server/`](scanner-server/) | Shares a USB scanner over AirScan/eSCL, with a web interface. Ships Epson's driver, so an Epson Perfection V39 II works out of the box. |
 
 ## Installation
 

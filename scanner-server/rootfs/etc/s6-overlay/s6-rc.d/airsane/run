@@ -1,0 +1,51 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# AirSane: the eSCL/AirScan server and web interface.
+#
+# It loads Epson's SANE backend directly, in this process. On aarch64 that
+# means this binary is itself armhf -- the driver is 32-bit only and a 64-bit
+# process cannot dlopen it. Do not be tempted to put a saned in between to
+# bridge the two: SANE's network protocol does not survive a 64-bit client
+# talking to a 32-bit server. Enumeration works, then sane_start desynchronises
+# and both ends block on each other until something is killed.
+#
+# --local-scanners-only=true because the only device here is the USB scanner;
+# there is no reason to let AirSane go looking on the network.
+# ==============================================================================
+readonly PORT=8090
+
+# Where the driver finds esfw0282.bin and friends. The plugin defaults to this
+# path, but it also honours the variable, so set it rather than rely on the
+# default staying put across Epson releases.
+export IMAGESCAN_FIRMWARE_DIR=/usr/share/epsonscan2
+
+# AirSane needs a working Avahi client even when mDNS announcement is off: if
+# the client cannot connect it gives up before publishing any scanner at all,
+# and the add-on comes up serving an empty device list.
+until [ -e /run/avahi-daemon/socket ]; do
+    sleep 1
+done
+
+declare -a args=(
+    "--listen-port=${PORT}"
+    "--interface=*"
+    "--options-file=/etc/airsane/options.conf"
+    "--access-file=/etc/airsane/access.conf"
+    "--ignore-list=/etc/airsane/ignore.conf"
+    "--local-scanners-only=true"
+    "--mdns-announce=true"
+    "--compatible-path=true"
+    "--random-paths=false"
+    "--web-interface=$(bashio::config 'web_interface')"
+)
+
+if bashio::config.true 'debug_logging'; then
+    # Epson's own tracing only happens when this directory already exists.
+    mkdir -p /tmp/epson
+    args+=("--access-log=-")
+    bashio::log.warning "Debug logging is on; Epson's trace lands in /tmp/epson/epsonscan2"
+fi
+
+bashio::log.info "Starting AirSane on port ${PORT} (eSCL + web interface)"
+
+exec airsaned "${args[@]}"

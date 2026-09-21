@@ -1,0 +1,7 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Avahi needs a system bus to sit on. Nothing else in this image uses D-Bus.
+# ==============================================================================
+bashio::log.info "Starting D-Bus daemon"
+
+exec dbus-daemon --system --nofork --nopidfile

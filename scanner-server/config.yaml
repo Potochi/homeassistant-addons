@@ -1,0 +1,40 @@
+# https://developers.home-assistant.io/docs/add-ons/configuration
+name: Scanner Server
+version: "1.0.0"
+slug: scanner-server
+description: >-
+  Shares a USB scanner with the rest of the network over AirScan/eSCL, the
+  scanning counterpart to AirPrint. Ships Epson's proprietary driver, so an
+  Epson Perfection V39 II works out of the box, and offers a web interface for
+  clients that cannot speak eSCL.
+url: https://github.com/Potochi/homeassistant-addons
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: services
+boot: auto
+# mDNS is what makes the scanner appear by itself in macOS, iOS, Windows and
+# Mopria. It cannot cross a bridge network, so the add-on shares the host's.
+host_network: true
+usb: true
+ports:
+  "8090/tcp": 8090
+ports_description:
+  "8090/tcp": eSCL/AirScan endpoint and web interface
+webui: "http://[HOST]:[PORT:8090]/"
+map:
+  - addon_config:rw
+options:
+  location: ""
+  web_interface: true
+  macos_gamma_fix: true
+  extra_options: []
+  debug_logging: false
+schema:
+  location: str?
+  web_interface: bool
+  macos_gamma_fix: bool
+  extra_options:
+    - str
+  debug_logging: bool

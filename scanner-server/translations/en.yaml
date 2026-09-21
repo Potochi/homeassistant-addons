@@ -1,0 +1,34 @@
+configuration:
+  location:
+    name: Location
+    description: >-
+      Where the scanner is, for example "Office" or "Living Room". Clients show
+      this next to the scanner name, which is the only way to tell two of them
+      apart. Leave empty to use the host name.
+  web_interface:
+    name: Web interface
+    description: >-
+      Serves the scan page on port 8090 for clients that cannot speak eSCL. The
+      eSCL endpoint itself is unaffected, so macOS, iOS, Windows and Mopria keep
+      working with this off.
+  macos_gamma_fix:
+    name: Correct gamma for macOS
+    description: >-
+      macOS interprets every scan with a gamma of 1.8 baked in and offers no way
+      to change it, which makes scans look dark and flattens the shadows. This
+      pre-applies the inverse to cancel it out. Turn it off if you scan only
+      from Windows, Linux or Android, where it makes images look washed out.
+  extra_options:
+    name: Extra scanner options
+    description: >-
+      Raw lines appended to AirSane's options.conf, one per entry, as "name
+      value" - for example "resolution 300" or "brightness 10". Use this for
+      SANE backend options this add-on does not model. Run "scanimage -A" to
+      see what the scanner accepts.
+  debug_logging:
+    name: Debug logging
+    description: >-
+      Logs every HTTP request and turns on SANE and Epson tracing (the latter
+      into /tmp/epson). Noisy; turn it on only to work out why a scan fails.
+network:
+  8090/tcp: eSCL/AirScan endpoint and web interface
