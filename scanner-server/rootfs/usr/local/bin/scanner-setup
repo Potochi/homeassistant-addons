@@ -20,6 +20,29 @@ opt() {
 mkdir -p /run/dbus
 
 # ------------------------------------------------------------------------------
+# Publish under the host's name, not the container's.
+#
+# Avahi and AirSane both derive names from gethostname(), which inside an
+# add-on container is the slug ("<hash>-scanner-server"). That name ends up as
+# the SRV target of the scanner service and in the adminurl/representation TXT
+# records, and nothing on the network can resolve any of it. Clients still see
+# the scanner in their browse list - the instance name is just a label - and
+# then hang when they try to open it. AirSane's URLs are handled separately
+# with --announce-base-url=http://%H:8090, which picks up whatever Avahi is
+# configured with here.
+# ------------------------------------------------------------------------------
+host_name="$(bashio::info.hostname || true)"
+
+if [[ -z "${host_name}" || "${host_name}" == "null" ]]; then
+    bashio::log.warning \
+        "Could not ask the Supervisor for the host name; falling back to 'homeassistant'. If the scanner is found but will not open, this is why."
+    host_name=homeassistant
+fi
+
+sed -i "s/^host-name=.*/host-name=${host_name}/" /etc/avahi/avahi-daemon.conf
+bashio::log.info "Publishing the scanner as ${host_name}.local"
+
+# ------------------------------------------------------------------------------
 # USB inventory. 0x04b8 is Seiko Epson; 0x013f is the Perfection V39 II, which
 # is the one model whose firmware this image is guaranteed to carry.
 # ------------------------------------------------------------------------------

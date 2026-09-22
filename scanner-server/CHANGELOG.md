@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.1
+
+- Fix clients finding the scanner but hanging when they open it, macOS Image
+  Capture in particular. Avahi and AirSane both name things after
+  `gethostname()`, which inside an add-on container is the slug
+  `<hash>-scanner-server`. That name went into the SRV record of the published
+  service and into the `adminurl`/`representation` TXT records, and nothing on
+  the network can resolve it. Browsing still worked, because the instance name
+  is only a label, so the scanner appeared and then hung on open while the
+  client waited on a host that does not exist.
+  Avahi is now pointed at the Home Assistant host's own name, and AirSane is
+  started with `--announce-base-url=http://%H:8090` so its URLs match the SRV
+  record. Avahi publishes no address records, so it never probes for that name
+  and cannot lose the conflict against the host's own responder - which would
+  have renamed it to `<name>-2` and broken it all over again.
+
 ## 1.0.0
 
 - Initial release.

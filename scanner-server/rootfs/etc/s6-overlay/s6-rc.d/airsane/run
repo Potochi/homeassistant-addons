@@ -28,6 +28,13 @@ done
 
 declare -a args=(
     "--listen-port=${PORT}"
+    # Without this, AdminURI, IconURI and the adminurl/representation TXT
+    # records are built from gethostname(), which in here is the container
+    # slug and resolves nowhere. macOS fetches IconURI when you open a
+    # scanner, so it would sit there waiting on a host that does not exist.
+    # %H expands to Avahi's FQDN, which scanner-setup has pointed at the
+    # actual Home Assistant host, so these URLs match the SRV record.
+    "--announce-base-url=http://%H:${PORT}"
     "--interface=*"
     "--options-file=/etc/airsane/options.conf"
     "--access-file=/etc/airsane/access.conf"
