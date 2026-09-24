@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.2
+
+- PDFs are now roughly 5x smaller for colour scans and 2x for gray. Stock
+  AirSane writes each page into its PDF as a raw, uncompressed bitmap - an A4
+  colour page at 300 dpi came out at about 26 MB. The add-on now patches its
+  PDF encoder to store gray and colour pages as JPEG (`DCTDecode`), which is
+  what PDF/raster prescribes for continuous-tone images. The embedded JPEG is
+  byte-identical to what the same scan produces as `image/jpeg`, so PDF output
+  loses nothing beyond what JPEG output already did. 16-bit scans are reduced
+  to 8 bits, which is what every PDF viewer displays anyway. 1-bit line art
+  cannot be JPEG-encoded and is still stored uncompressed.
+- The JPEG is written straight into the response as the scan arrives, so pages
+  still stream to the client rather than being buffered whole in memory.
+- The PDF page tree no longer assumes a fixed number of objects per page; page
+  ids are tracked explicitly. Checked with qpdf on documents of 1, 3 and 7
+  pages, with each page rendered and verified in order.
+
 ## 1.0.1
 
 - Fix clients finding the scanner but hanging when they open it, macOS Image

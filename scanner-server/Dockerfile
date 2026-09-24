@@ -79,9 +79,15 @@ RUN set -eux; \
 # it. On aarch64 it is cross-compiled to armhf so that it can dlopen Epson's
 # 32-bit SANE backend directly -- see the note at the top of this file for why
 # bridging the two word sizes over the network protocol is not an option.
+#
+# patches/airsane-pdf-jpeg.patch makes its PDF output store pages as JPEG.
+# Unpatched, AirSane writes every page into the PDF as a raw bitmap, so an A4
+# colour page at 300 dpi comes out at about 26 MB. The JPEG it embeds is
+# byte-identical to what AirSane already serves for image/jpeg.
+COPY patches /tmp/patches
 RUN set -eux; \
     if [ "${BUILD_ARCH}" = "aarch64" ]; then \
-        build_pkgs="crossbuild-essential-armhf cmake make \
+        build_pkgs="crossbuild-essential-armhf cmake make patch \
             libsane-dev:armhf libjpeg-dev:armhf libpng-dev:armhf \
             libavahi-client-dev:armhf libusb-1.0-0-dev:armhf"; \
         cross_args="-DCMAKE_SYSTEM_NAME=Linux \
@@ -90,7 +96,7 @@ RUN set -eux; \
             -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
             -DCMAKE_LIBRARY_ARCHITECTURE=arm-linux-gnueabihf"; \
     else \
-        build_pkgs="build-essential cmake make \
+        build_pkgs="build-essential cmake make patch \
             libsane-dev libjpeg-dev libpng-dev \
             libavahi-client-dev libusb-1.0-0-dev"; \
         cross_args=""; \
@@ -101,6 +107,7 @@ RUN set -eux; \
         -o /tmp/airsane.tar.gz; \
     mkdir -p /tmp/airsane; \
     tar -xzf /tmp/airsane.tar.gz -C /tmp/airsane --strip-components=1; \
+    for p in /tmp/patches/*.patch; do patch -d /tmp/airsane -p1 < "${p}"; done; \
     cmake -S /tmp/airsane -B /tmp/airsane/build \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_INSTALL_PREFIX=/usr \
@@ -108,7 +115,7 @@ RUN set -eux; \
     cmake --build /tmp/airsane/build -j"$(nproc)"; \
     cmake --install /tmp/airsane/build; \
     apt-get purge -y --auto-remove ${build_pkgs}; \
-    rm -rf /tmp/airsane /tmp/airsane.tar.gz /var/lib/apt/lists/*
+    rm -rf /tmp/airsane /tmp/airsane.tar.gz /tmp/patches /var/lib/apt/lists/*
 
 # Epson Scan 2. Both debs declare no dependencies and unpack straight into the
 # Debian multiarch layout the binaries were linked against, so a plain dpkg -i

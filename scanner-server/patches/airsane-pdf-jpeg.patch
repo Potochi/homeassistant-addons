@@ -1,0 +1,180 @@
+--- a/imageformats/pdfencoder.cpp
++++ b/imageformats/pdfencoder.cpp
+@@ -17,6 +17,7 @@
+ */
+ 
+ #include "pdfencoder.h"
++#include "jpegencoder.h"
+ 
+ #include <arpa/inet.h>
+ #include <cassert>
+@@ -24,6 +25,7 @@
+ #include <cstdint>
+ #include <iomanip>
+ #include <iostream>
++#include <memory>
+ #include <locale>
+ #include <stdexcept>
+ #include <vector>
+@@ -135,6 +137,21 @@
+   std::string mInfoString;
+   int mObj;
+ 
++  // Object ids of the /Page objects, in page order. Kept explicitly rather
++  // than derived from a fixed stride, so the number of objects per page is
++  // free to change.
++  std::vector<int> mPageObjs;
++
++  // Non-null while a page's image stream is being written as JPEG. Its
++  // destination is our own output stream, so the compressed data goes
++  // straight into the PDF as the scan arrives, without buffering the page.
++  std::unique_ptr<JpegEncoder> mJpeg;
++
++  // Offset of the first byte of the current image stream, relative to
++  // mBegin. The stream's length is not known until the image is done, so it
++  // is measured and written afterwards as an indirect object.
++  std::streamoff mStreamStart;
++
+ #if BYTE_ORDER == LITTLE_ENDIAN
+   std::vector<uint16_t> mLineBuffer;
+ #endif
+@@ -152,6 +169,8 @@
+   : p(p)
+   , mBegin(0)
+   , mStartxref(0)
++  , mObj(0)
++  , mStreamStart(0)
+ {}
+ 
+ PdfEncoder::PdfEncoder()
+@@ -191,6 +210,8 @@
+                         pdfStringEncode(entry.second) + ")\n";
+ 
+   p->mObjects.clear();
++  p->mPageObjs.clear();
++  p->mJpeg.reset();
+   if (resolutionDpi() == 0)
+     throw std::runtime_error("no resolution specified");
+   p->mBegin = destination()->tellp();
+@@ -215,22 +236,58 @@
+       csname = "DeviceCMYK";
+       break;
+   };
+-  *destination() << p->defobj(++p->mObj) // mObj == 2
+-  << "<<\n/Type/Page\n/Contents " << p->mObj + 2 << " 0 R\n"
++
++  // Gray and colour pages are stored as JPEG (DCTDecode), which is what
++  // PDF/raster prescribes for continuous-tone images. Writing them raw, as
++  // this encoder used to, makes an A4 colour page at 300 dpi about 26 MB.
++  // JpegEncoder takes 8 and 16 bit samples (16 is reduced to 8). Anything
++  // else - in practice 1-bit line art, which JPEG cannot represent - is
++  // still written uncompressed.
++  const bool dct = (bitDepth() == 8 || bitDepth() == 16) &&
++                   (colorspace() == Grayscale || colorspace() == RGB);
++
++  // Four objects per page: the page, its image, its content stream, and the
++  // image stream's length, which is only known once the image is written.
++  const int pageObj = ++p->mObj;
++  const int imageObj = pageObj + 1;
++  const int contentsObj = pageObj + 2;
++  const int lengthObj = pageObj + 3;
++  p->mPageObjs.push_back(pageObj);
++
++  *destination() << p->defobj(pageObj)
++  << "<<\n/Type/Page\n/Contents " << contentsObj << " 0 R\n"
+   << "/Rotate " << orientationDegrees() << "\n"
+   << "/MediaBox [ 0 0 "
+   << pdfunits_per_px * width() << " "
+   << pdfunits_per_px * height() << " ]\n"
+   << "/Parent 1 0 R\n"
+-  << "/Resources << /XObject << /strip0 " << p->mObj + 1 << " 0 R >> >>\n"
++  << "/Resources << /XObject << /strip0 " << imageObj << " 0 R >> >>\n"
+   << ">>\nendobj\n"
+-  << p->defobj(++p->mObj) << "\n" // mObj == 3
++  << p->defobj(++p->mObj) << "\n" // imageObj
+   << "<<\n/Type /XObject\n/Subtype /Image\n"
+   << "/Width " << width() << "\n/Height " << height()
+   << "\n/ColorSpace /" << csname
+-  << "\n/BitsPerComponent " << bitDepth()
+-  << "\n/Length " << height() * bytesPerLine()
++  << "\n/BitsPerComponent " << (dct ? 8 : bitDepth());
++  if (dct)
++    *destination() << "\n/Filter /DCTDecode";
++  *destination() << "\n/Length " << lengthObj << " 0 R"
+   << "\n>>\nstream\n";
++
++  p->mStreamStart = destination()->tellp() - p->mBegin;
++
++  if (dct) {
++    // Same settings AirSane uses when a client asks for image/jpeg. The
++    // page's /Rotate carries the orientation, so the JPEG itself is upright.
++    p->mJpeg.reset(new JpegEncoder);
++    p->mJpeg->setGamma(1.0);
++    p->mJpeg->setQualityPercent(90);
++    p->mJpeg->setResolutionDpi(resolutionDpi());
++    p->mJpeg->setColorspace(colorspace());
++    p->mJpeg->setWidth(width());
++    p->mJpeg->setHeight(height());
++    p->mJpeg->setBitDepth(bitDepth());
++    p->mJpeg->setDestination(destination());
++  }
+ }
+ 
+ void
+@@ -242,12 +299,21 @@
+       << " 0 0 cm\n"
+       << "/strip0 Do\n";
+   std::string pagedef = oss.str();
++
++  // Both encoders count the same lines, so the JpegEncoder has already seen
++  // its last one and flushed the complete JPEG by the time we get here.
++  p->mJpeg.reset();
++  const std::streamoff length =
++    (destination()->tellp() - p->mBegin) - p->mStreamStart;
++
+   *destination()
+-  << "\nendstream\nendobj\n" << p->defobj(++p->mObj) // mObj == 4
++  << "\nendstream\nendobj\n" << p->defobj(++p->mObj) // contentsObj
+   << "\n<<\n/Length " << pagedef.length() << "\n>>\n"
+   << "stream\n"
+   << pagedef << "endstream\n"
+-  << "\nendobj\n";
++  << "\nendobj\n"
++  << p->defobj(++p->mObj) << "\n" // lengthObj
++  << length << "\nendobj\n";
+ }
+ 
+ void
+@@ -261,16 +327,16 @@
+   std::ostream& os = *destination();
+   os << p->defobj(1) << "\n<<\n"
+      << "/Type/Pages\n"
+-     << "/Count " << currentImage() << "\n"
++     << "/Count " << p->mPageObjs.size() << "\n"
+      << "/Kids [\n";
+-  for (int i = 2; i < p->mObj; i += 3)
+-    os << i << " 0 R\n";
++  for (int id : p->mPageObjs)
++    os << id << " 0 R\n";
+   os << "\n]\n>>\nendobj\n";
+ 
+-  os << p->defobj(++p->mObj) // mObj == 5
++  os << p->defobj(++p->mObj) // catalog
+      << "<<\n/Type/Catalog\n/Pages 1 0 R\n>>\n"
+      << "endobj\n";
+-  os << p->defobj(++p->mObj) // mObj == 6
++  os << p->defobj(++p->mObj) // info
+      << "<<\n" << p->mInfoString << ">>\nendobj\n";
+ 
+   p->mStartxref = os.tellp() - p->mBegin;
+@@ -295,6 +361,10 @@
+ void
+ PdfEncoder::onWriteLine(const void* pReadFrom)
+ {
++  if (p->mJpeg) {
++    p->mJpeg->writeLine(pReadFrom);
++    return;
++  }
+ #if BYTE_ORDER == LITTLE_ENDIAN
+   if (!p->mLineBuffer.empty()) {
+     const uint16_t *pIn = static_cast<const uint16_t*>(pReadFrom),

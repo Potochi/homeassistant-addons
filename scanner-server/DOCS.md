@@ -70,6 +70,24 @@ lists the scanner, and `simple-scan`, XSane or GIMP can use it.
 The web interface at `http://<home-assistant>:8090/` scans to JPEG, PNG or PDF
 from any browser.
 
+### File formats
+
+Every client can ask for JPEG, PNG or PDF.
+
+- **PDF** stores each page as JPEG, the same image you get when you ask for
+  JPEG, wrapped in a PDF. An A4 colour page at 300 dpi is a few MB. (Stock
+  AirSane writes raw bitmaps into its PDFs - about 26 MB for the same page -
+  so this add-on patches that; see `patches/`.) Line art, which JPEG cannot
+  represent, is still stored uncompressed, but at one bit per pixel that is
+  small anyway.
+- **JPEG** is the same image without the PDF around it.
+- **PNG** is lossless and correspondingly large. Use it when you need every
+  pixel exactly, for example archiving photos you intend to edit.
+
+Resolution matters far more than format. File size grows with the square of
+it: 600 dpi is four times the data of 300, and this scanner offers up to 9600.
+For documents, 300 dpi is plenty; for prints you want to enlarge, 600-1200.
+
 ## Options
 
 ### `location`

@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Scanner Server
-version: "1.0.1"
+version: "1.0.2"
 slug: scanner-server
 description: >-
   Shares a USB scanner with the rest of the network over AirScan/eSCL, the
